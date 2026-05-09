@@ -16,12 +16,12 @@ import (
 // a pre-computed code (useful when the 2FA seed is held by a hardware
 // token or a separate secrets service that won't release the seed).
 type Credentials struct {
-	UserID     string
-	Password   string
-	TOTPSecret string // base32; alternative to TOTPValue
-	TOTPValue  string // 6-digit code; alternative to TOTPSecret
-	APIKey     string // optional → empty triggers OMS-only flow
-	APISecret  string // optional
+	UserID     string `json:"user_id"`
+	Password   string `json:"password"`
+	TOTPSecret string `json:"totp_secret,omitempty"` // base32; alternative to TOTPValue
+	TOTPValue  string `json:"totp_value,omitempty"`  // 6-digit code; alternative to TOTPSecret
+	APIKey     string `json:"api_key,omitempty"`     // optional → empty triggers OMS-only flow
+	APISecret  string `json:"api_secret,omitempty"`  // optional
 }
 
 // Validate runs format checks before any network I/O. Failures return a

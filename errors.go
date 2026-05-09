@@ -2,6 +2,15 @@ package brokersession
 
 import "fmt"
 
+// BrokerName identifies which broker generated a session or error.
+type BrokerName string
+
+// Canonical broker identifiers. Wire format is the underlying string value.
+const (
+	BrokerZerodha BrokerName = "zerodha"
+	BrokerUpstox  BrokerName = "upstox"
+)
+
 // Step identifies a stage of the GenerateSession / DeleteSession flow.
 // Shared step constants are declared here; broker-specific step constants
 // are declared in their owning subpackage.

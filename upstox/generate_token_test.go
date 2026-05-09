@@ -2,7 +2,6 @@ package upstox
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -45,7 +44,9 @@ func TestDoTokenExchange_HappyPath(t *testing.T) {
 		"email":"u@example.com",
 		"exchanges":["NSE","BSE"],
 		"products":["D","I"],
-		"order_types":["MARKET","LIMIT"]
+		"order_types":["MARKET","LIMIT"],
+		"poa":false,
+		"is_active":true
 	}`, jwt)
 
 	var (
@@ -98,13 +99,14 @@ func TestDoTokenExchange_HappyPath(t *testing.T) {
 	if sess.IssuedAt.Location().String() != "Asia/Kolkata" && sess.IssuedAt.Location().String() != "IST" {
 		t.Errorf("IssuedAt location = %s, want IST", sess.IssuedAt.Location())
 	}
-	// Raw round-trips.
-	var rawCheck map[string]any
-	if err := json.Unmarshal([]byte(respBody), &rawCheck); err != nil {
-		t.Fatalf("unmarshal raw: %v", err)
+	if sess.POA != false {
+		t.Errorf("POA = %v, want false", sess.POA)
 	}
-	if sess.Raw["access_token"] != rawCheck["access_token"] {
-		t.Errorf("Raw.access_token mismatch")
+	if sess.IsActive != true {
+		t.Errorf("IsActive = %v, want true", sess.IsActive)
+	}
+	if sess.ExtendedToken != "ext-tok" {
+		t.Errorf("ExtendedToken = %q, want ext-tok", sess.ExtendedToken)
 	}
 }
 

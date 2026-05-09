@@ -170,7 +170,7 @@ func TestDoProfile_HappyPath(t *testing.T) {
 }
 
 // TestGenerateSession_OMSOnly_FullFlow drives only the OMS leg
-// (APIKey/APISecret unset) and asserts the synthesized Raw shape.
+// (APIKey/APISecret unset) and asserts the populated *Session fields.
 func TestGenerateSession_OMSOnly_FullFlow(t *testing.T) {
 	omsServer(t,
 		func(w http.ResponseWriter, r *http.Request) {
@@ -184,8 +184,9 @@ func TestGenerateSession_OMSOnly_FullFlow(t *testing.T) {
 		},
 		func(w http.ResponseWriter, r *http.Request) {
 			_, _ = w.Write([]byte(`{"status":"success","data":{
-				"user_id":"AB1234","user_name":"Some User","user_type":"individual",
-				"email":"u@x.com","broker":"ZERODHA",
+				"user_id":"AB1234","user_name":"Some User","user_shortname":"User",
+				"user_type":"individual","email":"u@x.com","avatar_url":"https://example.com/a.png",
+				"broker":"ZERODHA",
 				"exchanges":["NSE"],"products":["CNC"],"order_types":["MARKET"]
 			}}`))
 		},
@@ -200,28 +201,27 @@ func TestGenerateSession_OMSOnly_FullFlow(t *testing.T) {
 	if sess.Enctoken != "enc-tok" {
 		t.Errorf("Enctoken = %q, want enc-tok", sess.Enctoken)
 	}
-	if sess.APIKey != "" || sess.AccessToken != "" {
-		t.Errorf("OMS-only flow leaked API fields: APIKey=%q AccessToken=%q", sess.APIKey, sess.AccessToken)
+	if sess.PublicToken != "pub-tok" {
+		t.Errorf("PublicToken = %q, want pub-tok", sess.PublicToken)
+	}
+	if sess.UserShortname != "User" {
+		t.Errorf("UserShortname = %q, want User", sess.UserShortname)
+	}
+	if sess.AvatarURL != "https://example.com/a.png" {
+		t.Errorf("AvatarURL = %q, want example URL", sess.AvatarURL)
+	}
+	if sess.LoginTime == "" {
+		t.Errorf("LoginTime = empty, want formatted timestamp")
+	}
+	if sess.APIKey != "" || sess.AccessToken != "" || sess.RefreshToken != "" || sess.Silo != "" {
+		t.Errorf("OMS-only flow leaked API fields: APIKey=%q AccessToken=%q RefreshToken=%q Silo=%q",
+			sess.APIKey, sess.AccessToken, sess.RefreshToken, sess.Silo)
+	}
+	if sess.Meta.DematConsent != "" {
+		t.Errorf("OMS-only flow leaked Meta.DematConsent = %q", sess.Meta.DematConsent)
 	}
 	if sess.IssuedAt == nil {
 		t.Errorf("IssuedAt = nil")
-	}
-	// Synthesized Raw shape.
-	data, ok := sess.Raw["data"].(map[string]any)
-	if !ok {
-		t.Fatalf("Raw.data not a map")
-	}
-	if data["enctoken"] != "enc-tok" {
-		t.Errorf("Raw.data.enctoken = %v", data["enctoken"])
-	}
-	if data["public_token"] != "pub-tok" {
-		t.Errorf("Raw.data.public_token = %v", data["public_token"])
-	}
-	if data["kf_session"] != "kf-val" {
-		t.Errorf("Raw.data.kf_session = %v", data["kf_session"])
-	}
-	if _, ok := data["login_time"].(string); !ok {
-		t.Errorf("Raw.data.login_time = %v, want string", data["login_time"])
 	}
 }
 

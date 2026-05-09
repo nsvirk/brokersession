@@ -21,7 +21,7 @@ var urlProfile = "https://api.upstox.com/v2/user/profile"
 // (false, *brokersession.Error{Step: StepValidate, Message: "session: required"})
 // without making any HTTP call. Transport-level failures (DNS, TCP reset,
 // context cancellation) return (false, *brokersession.Error{Step: StepVerify, Err: cause}).
-func (c *Client) VerifySession(ctx context.Context, session *brokersession.Session) (bool, error) {
+func (c *Client) VerifySession(ctx context.Context, session *Session) (bool, error) {
 	if session == nil {
 		return false, &brokersession.Error{
 			Broker:  brokersession.BrokerUpstox,

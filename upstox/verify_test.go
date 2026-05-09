@@ -25,7 +25,7 @@ func verifyServer(t *testing.T, status int, gotAuth *string) {
 func TestVerifySession_OK(t *testing.T) {
 	var gotAuth string
 	verifyServer(t, http.StatusOK, &gotAuth)
-	ok, err := New().VerifySession(context.Background(), &brokersession.Session{AccessToken: "the-token"})
+	ok, err := New().VerifySession(context.Background(), &Session{AccessToken: "the-token"})
 	if err != nil {
 		t.Fatalf("VerifySession error: %v", err)
 	}
@@ -39,7 +39,7 @@ func TestVerifySession_OK(t *testing.T) {
 
 func TestVerifySession_401(t *testing.T) {
 	verifyServer(t, http.StatusUnauthorized, nil)
-	ok, err := New().VerifySession(context.Background(), &brokersession.Session{AccessToken: "x"})
+	ok, err := New().VerifySession(context.Background(), &Session{AccessToken: "x"})
 	if err != nil {
 		t.Fatalf("VerifySession error: %v", err)
 	}
@@ -59,7 +59,7 @@ func TestVerifySession_NilSession(t *testing.T) {
 func TestVerifySession_TransportError(t *testing.T) {
 	// Non-routable URL → transport-level error.
 	withEndpoints(t, map[*string]string{&urlProfile: "http://127.0.0.1:1/profile"})
-	ok, err := New().VerifySession(context.Background(), &brokersession.Session{AccessToken: "x"})
+	ok, err := New().VerifySession(context.Background(), &Session{AccessToken: "x"})
 	if ok {
 		t.Errorf("ok = true on transport error")
 	}

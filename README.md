@@ -1,7 +1,8 @@
 # brokersession
 
-> 🔐 A Go library providing a unified, fully-automated session-handling
-> interface for Indian stock brokers.
+> 🔐 A Go library providing fully-automated, headless session-handling
+> for Indian stock brokers, with per-broker `Session` and `Credentials`
+> types shaped to each broker's session-API JSON.
 
 Sessions are generated headlessly — no browser, no user interaction during
 the flow — using the credentials each broker requires (TOTP secret, PIN,
@@ -17,7 +18,8 @@ etc.).
 ## ✨ Features
 
 - 🤖 Fully headless login — no browser, no manual interaction.
-- 🧩 One unified `*brokersession.Session` shape across all brokers.
+- 🧩 Per-broker `Session` and `Credentials` types — each shaped to its
+  broker's session-API JSON, with snake_case tags for storage.
 - 🎯 Strictly-typed `Credentials` per broker, validated up front.
 - 🛑 Typed `*brokersession.Error` with broker / step / status / message / raw.
 - 🪶 Tiny surface: `GenerateSession`, `VerifySession`, `DeleteSession`.
@@ -42,7 +44,7 @@ package adds a broker-agnostic TOTP helper.
 | `GenerateTOTPValue`         | `brokersession` (root) | Derive a 6-digit RFC-6238 TOTP code from a base32 secret, suitable for `Credentials.TOTPValue`. Saves pulling in a separate OTP library. Signature: `(secret, t) (string, error)`.     |
 | `New`                       | `zerodha` / `upstox`   | Construct a broker client. Options: `WithHTTPClient(*http.Client)`, `WithUserAgent(string)`. Zero-value usage (`zerodha.New()` / `upstox.New()`) is supported.                         |
 | `(Credentials).Validate`    | `zerodha` / `upstox`   | Format-check credentials before any network call. Run automatically by `GenerateSession`; exposed so callers can pre-flight a form without paying a round-trip.                        |
-| `(*Client).GenerateSession` | `zerodha` / `upstox`   | Run the headless login flow end-to-end. Returns `(*brokersession.Session, error)`.                                                                                                     |
+| `(*Client).GenerateSession` | `zerodha` / `upstox`   | Run the headless login flow end-to-end. Returns `(*Session, error)` from the owning subpackage (`*zerodha.Session` or `*upstox.Session`).                                              |
 | `(*Client).VerifySession`   | `zerodha` / `upstox`   | Hit the broker profile endpoint with the session's auth header. `true` on 200, `false` otherwise. Errors only for `nil` session or transport-level failures.                           |
 | `(*Client).DeleteSession`   | `zerodha` / `upstox`   | Invalidate the session at the broker. Idempotent (401/404 = success). Zerodha OMS-only sessions are a no-op — Kite does not expose `enctoken` revocation.                              |
 
@@ -50,19 +52,21 @@ All `*Client` methods take `ctx context.Context` as the first argument.
 
 ### 📥 Credentials shape
 
-Constructed in Go (no JSON wire format); shown here as JSON for compactness.
-Exactly one of `TOTPSecret` / `TOTPValue` must be set on each broker.
+Both `Credentials` types carry snake_case `json` tags, so credentials can
+be loaded from / saved to JSON files with the same shape as the session
+output. Exactly one of `totp_secret` / `totp_value` must be set on each
+broker. Unknown keys are ignored by the standard `encoding/json` decoder.
 
-**Zerodha** (`APIKey`/`APISecret` empty → OMS-only flow; both set → OMS + API):
+**Zerodha** (`api_key`/`api_secret` empty → OMS-only flow; both set → OMS + API):
 
 ```jsonc
 {
-  "UserID":     "AB1234",                          // required
-  "Password":   "********",                        // required
-  "TOTPSecret": "JBSWY3DPEHPK3PXP",                // base32; alternative to TOTPValue
-  "TOTPValue":  "",                                // 6-digit code; alternative to TOTPSecret
-  "APIKey":     "",                                // optional; empty → OMS-only flow
-  "APISecret":  ""                                 // optional; required when APIKey is set
+  "user_id":     "AB1234",                          // required
+  "password":    "********",                        // required
+  "totp_secret": "JBSWY3DPEHPK3PXP",                // base32; alternative to totp_value
+  "totp_value":  "",                                // 6-digit code; alternative to totp_secret
+  "api_key":     "",                                // optional; empty → OMS-only flow
+  "api_secret":  ""                                 // optional; required when api_key is set
 }
 ```
 
@@ -70,45 +74,72 @@ Exactly one of `TOTPSecret` / `TOTPValue` must be set on each broker.
 
 ```jsonc
 {
-  "APIKey":      "00000000-0000-0000-0000-000000000000", // UUID from developer portal
-  "APISecret":   "********",                             // OAuth client secret
-  "Mobile":      "9876543210",                           // 10 digits, no country code
-  "PIN":         "123456",                               // 6 digits
-  "TOTPSecret":  "JBSWY3DPEHPK3PXP",                     // base32; alternative to TOTPValue
-  "TOTPValue":   "",                                     // 6-digit code; alternative to TOTPSecret
-  "RedirectURL": "https://example.com/callback"          // absolute URL registered with the app
+  "api_key":      "00000000-0000-0000-0000-000000000000", // UUID from developer portal
+  "api_secret":   "********",                             // OAuth client secret
+  "mobile":       "9876543210",                           // 10 digits, no country code
+  "pin":          "123456",                               // 6 digits
+  "totp_secret":  "JBSWY3DPEHPK3PXP",                     // base32; alternative to totp_value
+  "totp_value":   "",                                     // 6-digit code; alternative to totp_secret
+  "redirect_url": "https://example.com/callback"          // absolute URL registered with the app
 }
 ```
 
 ### 📤 Session shape
 
-The result of `GenerateSession` — a unified `*brokersession.Session` with
-lowercase-snake-case JSON keys and IST `time.Time` values. Suitable for
-storage in DynamoDB / Redis / S3 / Postgres. **The wire format below is
-part of the public contract.**
+The result of `GenerateSession` is a per-broker `*Session` whose fields
+mirror that broker's session-API JSON. Both shapes use lowercase-snake-case
+JSON keys; `issued_at` (and Upstox's `expires_at`) are IST `time.Time`
+values. Zerodha's session API does not return an expiry, so `*zerodha.Session`
+has no `expires_at` field. **The wire format below is part of the public
+contract.**
 
-`raw` retains the **verbatim broker token-exchange response** — every key
-the broker returned, even when duplicated by a top-level field. For
-Zerodha's OMS-only flow (no token exchange) `raw` is synthesized from the
-profile call and cookie jar in the same shape.
+**Zerodha** (`*zerodha.Session`) — OMS-only flow leaves `api_key`,
+`access_token`, `refresh_token`, `silo`, `meta` zero-valued; OMS+API flow
+populates the full shape.
 
 ```jsonc
 {
-  "broker":         "zerodha",                                     // or "upstox"
+  "broker":         "zerodha",
+  "user_id":        "AB1234",
+  "user_name":      "Alice Bose",
+  "user_shortname": "Alice",
+  "user_type":      "individual",
+  "email":          "alice@example.com",
+  "avatar_url":     "https://kite.zerodha.com/...",
+  "api_key":        "abcd1234",                                    // OMS+API flow only
+  "access_token":   "...",                                         // OMS+API flow only
+  "public_token":   "...",
+  "refresh_token":  "",                                            // present when broker returns it
+  "enctoken":       "...",                                         // OMS-leg cookie value
+  "silo":           "",                                            // OMS+API flow only
+  "exchanges":      ["NSE", "BSE", "NFO", "MCX"],
+  "products":       ["CNC", "MIS", "NRML"],
+  "order_types":    ["MARKET", "LIMIT", "SL", "SL-M"],
+  "login_time":     "2026-05-03 09:30:00",                         // raw API string
+  "meta":           { "demat_consent": "physical" },               // OMS+API flow only
+  "issued_at":      "2026-05-03T09:30:00+05:30"                    // derived (IST)
+}
+```
+
+**Upstox** (`*upstox.Session`):
+
+```jsonc
+{
+  "broker":         "upstox",
   "user_id":        "AB1234",
   "user_name":      "Alice Bose",
   "user_type":      "individual",
   "email":          "alice@example.com",
-  "api_key":        "abcd1234",                                    // omitted on OMS-only Zerodha
-  "access_token":   "eyJhbGciOi...",
-  "extended_token": "...",                                         // Upstox / Zerodha-API only
-  "enctoken":       "...",                                         // Zerodha OMS leg only
-  "exchanges":      ["NSE", "BSE", "NFO", "MCX"],
-  "products":       ["CNC", "MIS", "NRML"],
+  "exchanges":      ["NSE", "NFO", "BSE", "CDS", "BFO", "BCD"],
+  "products":       ["D", "CO", "I"],
   "order_types":    ["MARKET", "LIMIT", "SL", "SL-M"],
-  "issued_at":      "2026-05-03T09:15:00+05:30",
-  "expires_at":     "2026-05-04T06:00:00+05:30",                   // omitted when broker doesn't expose
-  "raw":            { /* verbatim broker token-exchange JSON */ }
+  "poa":            false,
+  "is_active":      true,
+  "api_key":        "00000000-0000-0000-0000-000000000000",
+  "access_token":   "eyJhbGciOi...",
+  "extended_token": "...",
+  "issued_at":      "2026-05-03T09:30:00+05:30",                   // decoded from JWT iat
+  "expires_at":     "2026-05-04T06:00:00+05:30"                    // decoded from JWT exp
 }
 ```
 
@@ -203,8 +234,16 @@ func main() {
 }
 ```
 
-A runnable version with a `--flow api|oms` switch lives at
-[examples/zerodha/main.go](./examples/zerodha/main.go).
+A runnable, file-driven version lives at
+[examples/zerodha/main.go](./examples/zerodha/main.go). It reads
+credentials from `$BROKERSESSION_PATH/zerodha/users/<user>.json` and
+writes the resulting session to
+`$BROKERSESSION_PATH/zerodha/sessions/<user>.json`
+(`$BROKERSESSION_PATH` defaults to `~/.brokersession`):
+
+```sh
+go run ./examples/zerodha alice [--flow api|oms]
+```
 
 ### 📊 Upstox
 
@@ -274,7 +313,16 @@ func main() {
 }
 ```
 
-A runnable version lives at [examples/upstox/main.go](./examples/upstox/main.go).
+A runnable, file-driven version lives at
+[examples/upstox/main.go](./examples/upstox/main.go). It reads
+credentials from `$BROKERSESSION_PATH/upstox/users/<user>.json` and
+writes the resulting session to
+`$BROKERSESSION_PATH/upstox/sessions/<user>.json`
+(`$BROKERSESSION_PATH` defaults to `~/.brokersession`):
+
+```sh
+go run ./examples/upstox alice
+```
 
 ## 🧪 Tests
 
@@ -286,7 +334,12 @@ go test ./...
 ```
 
 End-to-end verification is by running the two `examples/` programs
-against real broker credentials (set the broker-specific env vars).
+against real broker credentials. Each program reads its credentials
+from `$BROKERSESSION_PATH/<broker>/users/<user>.json` and writes the
+generated session to `$BROKERSESSION_PATH/<broker>/sessions/<user>.json`
+(`$BROKERSESSION_PATH` defaults to `~/.brokersession`). On a re-run the
+program first verifies any cached session and skips regeneration if the
+broker still accepts it.
 
 ## ⚙️ Operational notes
 
@@ -315,7 +368,9 @@ A few sharp edges to be aware of when running this in production:
 
 ## 🏷️ Status
 
-v1.0 — public API stable.
+v1.1 — public API stable. v1.1.0 introduced a breaking change: the
+unified top-level `*brokersession.Session` was replaced by per-broker
+`*zerodha.Session` and `*upstox.Session` types. See [CHANGELOG.md](./CHANGELOG.md).
 
 ## ⚠️ Disclaimer
 

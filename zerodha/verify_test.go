@@ -35,7 +35,7 @@ func verifyServer(t *testing.T, status int, gotAuth, gotPath *string) {
 func TestVerifySession_OMSMode_OK(t *testing.T) {
 	var gotAuth, gotPath string
 	verifyServer(t, http.StatusOK, &gotAuth, &gotPath)
-	ok, err := New().VerifySession(context.Background(), &brokersession.Session{Enctoken: "enc-tok"})
+	ok, err := New().VerifySession(context.Background(), &Session{Enctoken: "enc-tok"})
 	if err != nil {
 		t.Fatalf("VerifySession error: %v", err)
 	}
@@ -53,7 +53,7 @@ func TestVerifySession_OMSMode_OK(t *testing.T) {
 func TestVerifySession_APIMode_OK(t *testing.T) {
 	var gotAuth, gotPath string
 	verifyServer(t, http.StatusOK, &gotAuth, &gotPath)
-	ok, err := New().VerifySession(context.Background(), &brokersession.Session{
+	ok, err := New().VerifySession(context.Background(), &Session{
 		APIKey: "abc123", AccessToken: "acc-tok",
 	})
 	if err != nil {
@@ -72,7 +72,7 @@ func TestVerifySession_APIMode_OK(t *testing.T) {
 
 func TestVerifySession_401(t *testing.T) {
 	verifyServer(t, http.StatusUnauthorized, nil, nil)
-	ok, err := New().VerifySession(context.Background(), &brokersession.Session{Enctoken: "x"})
+	ok, err := New().VerifySession(context.Background(), &Session{Enctoken: "x"})
 	if err != nil {
 		t.Fatalf("VerifySession error: %v", err)
 	}
@@ -94,7 +94,7 @@ func TestVerifySession_TransportError(t *testing.T) {
 		&urlProfile:    "http://127.0.0.1:1/profile",
 		&urlAPIProfile: "http://127.0.0.1:1/profile",
 	})
-	ok, err := New().VerifySession(context.Background(), &brokersession.Session{Enctoken: "x"})
+	ok, err := New().VerifySession(context.Background(), &Session{Enctoken: "x"})
 	if ok {
 		t.Errorf("ok = true on transport error")
 	}

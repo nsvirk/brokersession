@@ -51,10 +51,13 @@ func TestGenerateSession_API_FullFlow(t *testing.T) {
 	})
 	mux.HandleFunc("/session/token", func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"status":"success","data":{
-			"user_id":"AB1234","user_name":"API Name","user_type":"individual","email":"api@x.com",
+			"user_id":"AB1234","user_name":"API Name","user_shortname":"API",
+			"user_type":"individual","email":"api@x.com","avatar_url":"https://example.com/api.png",
 			"broker":"ZERODHA","exchanges":["NSE","BSE"],"products":["CNC","MIS"],
 			"order_types":["MARKET","LIMIT"],"api_key":"abc123","access_token":"acc-tok",
-			"refresh_token":"ref-tok","enctoken":"enc-from-api","login_time":"2026-05-03 09:30:00"
+			"public_token":"pub-from-api","refresh_token":"ref-tok","enctoken":"enc-from-api",
+			"silo":"silo-1","login_time":"2026-05-03 09:30:00",
+			"meta":{"demat_consent":"physical"}
 		}}`))
 	})
 	srv := httptest.NewServer(mux)
@@ -88,9 +91,23 @@ func TestGenerateSession_API_FullFlow(t *testing.T) {
 	if sess.IssuedAt == nil || sess.IssuedAt.Format("2006-01-02 15:04:05") != "2026-05-03 09:30:00" {
 		t.Errorf("IssuedAt = %v, want parsed login_time 2026-05-03 09:30:00 IST", sess.IssuedAt)
 	}
-	// Raw is the verbatim API-leg session/token body.
-	if data, ok := sess.Raw["data"].(map[string]any); !ok || data["access_token"] != "acc-tok" {
-		t.Errorf("Raw.data.access_token mismatch")
+	if sess.LoginTime != "2026-05-03 09:30:00" {
+		t.Errorf("LoginTime = %q, want raw API string", sess.LoginTime)
+	}
+	if sess.RefreshToken != "ref-tok" {
+		t.Errorf("RefreshToken = %q, want ref-tok", sess.RefreshToken)
+	}
+	if sess.Silo != "silo-1" {
+		t.Errorf("Silo = %q, want silo-1", sess.Silo)
+	}
+	if sess.Meta.DematConsent != "physical" {
+		t.Errorf("Meta.DematConsent = %q, want physical", sess.Meta.DematConsent)
+	}
+	if sess.UserShortname != "API" {
+		t.Errorf("UserShortname = %q, want API (API-leg override)", sess.UserShortname)
+	}
+	if sess.AvatarURL != "https://example.com/api.png" {
+		t.Errorf("AvatarURL = %q, want API-leg URL", sess.AvatarURL)
 	}
 }
 

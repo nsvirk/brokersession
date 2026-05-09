@@ -1,16 +1,28 @@
-// Example program: generate a Zerodha session from credentials supplied
-// via env vars, print the result, and (optionally) delete it.
+// Example program: generate a Zerodha session from a credentials file,
+// write the session JSON to a sibling sessions/ directory, and verify.
 //
-// Usage: go run ./examples/zerodha [--flow api|oms]
+// Behavior:
 //
-// --flow api (default) runs the full OMS + API flow and requires
-// ZERODHA_API_KEY and ZERODHA_API_SECRET. --flow oms runs only the OMS
-// leg and ignores the API_KEY / API_SECRET env vars.
+//  1. If a cached session file already exists, the program verifies it
+//     against the broker first. If the broker accepts it, the program
+//     prints `cache_session_valid: true` and exits without regenerating.
+//  2. Otherwise it prints `cache_session_valid: false`, runs the full
+//     headless flow, writes the new session, verifies it, and prints
+//     `generated_session_valid: <true|false>`.
 //
-// Required env: ZERODHA_USER_ID, ZERODHA_PASSWORD, ZERODHA_TOTP_SECRET
-// (the secret is fed through brokersession.GenerateTOTPValue and the
-// resulting 6-digit code is passed as Credentials.TOTPValue).
-// Required for --flow api: ZERODHA_API_KEY, ZERODHA_API_SECRET.
+// Usage:
+//
+//	go run ./examples/zerodha <user> [--flow api|oms]
+//
+// <user> is the bare user name (no `.json` suffix). File layout, rooted
+// at $BROKERSESSION_PATH (default ~/.brokersession):
+//
+//	<root>/zerodha/users/<user>.json     // input credentials (snake_case)
+//	<root>/zerodha/sessions/<user>.json  // output session (created if missing)
+//
+// --flow api (default) runs the full OMS + API flow and requires api_key
+// and api_secret in the credentials file. --flow oms runs only the OMS
+// leg and ignores those fields.
 package main
 
 import (
@@ -21,46 +33,66 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/nsvirk/brokersession"
 	"github.com/nsvirk/brokersession/zerodha"
 )
 
+const broker = "zerodha"
+
 func main() {
-	flow := flag.String("flow", "api", `flow mode: "api" (OMS + API leg) or "oms" (OMS only)`)
-	flag.Parse()
+	args := os.Args[1:]
+	if len(args) < 1 {
+		log.Fatalf("usage: go run ./examples/zerodha <user> [--flow api|oms]")
+	}
+	user := args[0]
+
+	fs := flag.NewFlagSet("zerodha", flag.ExitOnError)
+	flow := fs.String("flow", "api", `flow mode: "api" (OMS + API leg) or "oms" (OMS only)`)
+	if err := fs.Parse(args[1:]); err != nil {
+		log.Fatalf("parse flags: %v", err)
+	}
 	if *flow != "api" && *flow != "oms" {
 		log.Fatalf("invalid --flow %q: want \"api\" or \"oms\"", *flow)
 	}
 
-	// Derive the 6-digit code from the stored TOTP secret using the public
-	// helper. Using TOTPValue (instead of TOTPSecret) is the right path when
-	// the seed lives in a hardware token, password manager, or external
-	// secrets service that produces codes but won't release the seed. Here
-	// we read the secret from env purely to keep the example self-contained.
-	totpValue, err := brokersession.GenerateTOTPValue(os.Getenv("ZERODHA_TOTP_SECRET"), time.Now())
-	if err != nil {
-		log.Fatalf("generate totp value failed: %v", err)
-	}
+	root := brokersessionPath()
+	credsPath := filepath.Join(root, broker, "users", user+".json")
+	sessionPath := filepath.Join(root, broker, "sessions", user+".json")
 
-	creds := zerodha.Credentials{
-		UserID:    os.Getenv("ZERODHA_USER_ID"),
-		Password:  os.Getenv("ZERODHA_PASSWORD"),
-		TOTPValue: totpValue,
-	}
-	if *flow == "api" {
-		creds.APIKey = os.Getenv("ZERODHA_API_KEY")
-		creds.APISecret = os.Getenv("ZERODHA_API_SECRET")
-		if creds.APIKey == "" || creds.APISecret == "" {
-			log.Fatal("--flow api requires ZERODHA_API_KEY and ZERODHA_API_SECRET")
-		}
-	}
+	printSeparator()
+	defer printSeparator()
+	printRow("broker", broker)
+	printRow("user", user)
+	printRow("session_file", sessionPath)
 
 	client := zerodha.New()
-
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
+
+	// 1. Try the cached session first.
+	if cached, ok := tryLoadSession(sessionPath); ok {
+		valid, _ := client.VerifySession(ctx, cached)
+		printRow("cache_session_valid", valid)
+		if valid {
+			return
+		}
+	} else {
+		printRow("cache_session_valid", false)
+	}
+
+	// 2. Cache miss / invalid: regenerate.
+	var creds zerodha.Credentials
+	if err := readJSON(credsPath, &creds); err != nil {
+		log.Fatalf("read creds %s: %v", credsPath, err)
+	}
+	if *flow == "oms" {
+		// OMS-only: clear API fields so the API leg is skipped.
+		creds.APIKey = ""
+		creds.APISecret = ""
+	}
 
 	session, err := client.GenerateSession(ctx, creds)
 	if err != nil {
@@ -72,15 +104,14 @@ func main() {
 		log.Fatalf("generate session failed: %v", err)
 	}
 
-	printJSON("session", session)
+	if err := writeJSON(sessionPath, session); err != nil {
+		log.Fatalf("write session %s: %v", sessionPath, err)
+	}
 
-	// Verify the session by hitting the broker's profile endpoint.
-	// API mode: GET https://api.kite.trade/user/profile with
-	//   `Authorization: token <api_key>:<access_token>`.
-	// OMS-only mode: GET https://kite.zerodha.com/oms/user/profile with
-	//   `Authorization: enctoken <enctoken>`.
-	// 200 ⇒ true, any other status ⇒ false.
-	ok, err := client.VerifySession(ctx, session)
+	// Verify the freshly-generated session.
+	// API mode hits /user/profile with `Authorization: token <api_key>:<access_token>`;
+	// OMS-only hits /oms/user/profile with `Authorization: enctoken <enctoken>`.
+	valid, err := client.VerifySession(ctx, session)
 	if err != nil {
 		var bsErr *brokersession.Error
 		if errors.As(err, &bsErr) {
@@ -89,24 +120,65 @@ func main() {
 		}
 		log.Fatalf("verify session failed: %v", err)
 	}
-	fmt.Printf("session_valid: %v\n", ok)
-
-	// Delete the session when done.
-	// For OMS-only sessions (no APIKey/APISecret) DeleteSession is a no-op
-	// because Kite does not expose enctoken revocation. For API sessions it
-	// calls DELETE /session/token.
-	//
-	// if err := client.DeleteSession(ctx, session); err != nil {
-	// 	log.Fatalf("delete session failed: %v", err)
-	// }
-	// fmt.Println("session deleted")
+	printRow("generated_session_valid", valid)
 }
 
-// printJSON marshals v as indented JSON and writes it to stdout.
-func printJSON(label string, v any) {
+// printRow prints a label/value pair with the value left-aligned in a
+// fixed column so successive rows line up. Width is sized for the
+// longest label this program emits ("generated_session_valid:").
+func printRow(label string, value any) {
+	fmt.Printf("%-25s%v\n", label+":", value)
+}
+
+// printSeparator prints a 50-dash horizontal rule used to bracket the
+// program's output.
+func printSeparator() {
+	fmt.Println("--------------------------------------------------")
+}
+
+// tryLoadSession returns the cached session and true if path exists and
+// decodes as a *zerodha.Session. Missing or unparseable files return
+// (nil, false) — the caller treats that as a cache miss.
+func tryLoadSession(path string) (*zerodha.Session, bool) {
+	var s zerodha.Session
+	if err := readJSON(path, &s); err != nil {
+		return nil, false
+	}
+	return &s, true
+}
+
+// brokersessionPath returns $BROKERSESSION_PATH if set, else ~/.brokersession.
+func brokersessionPath() string {
+	if v := os.Getenv("BROKERSESSION_PATH"); v != "" {
+		return v
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		log.Fatalf("resolve home dir: %v", err)
+	}
+	return filepath.Join(home, ".brokersession")
+}
+
+// readJSON loads a JSON file into v. Unknown keys are ignored (default
+// encoding/json behavior); missing required fields surface later via
+// Credentials.Validate inside GenerateSession.
+func readJSON(path string, v any) error {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(b, v)
+}
+
+// writeJSON marshals v as indented JSON and writes it to path with 0600
+// permissions, creating parent directories as needed.
+func writeJSON(path string, v any) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
 	b, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
-		log.Fatalf("marshal %s: %v", label, err)
+		return err
 	}
-	fmt.Printf("%s:\n%s\n", label, b)
+	return os.WriteFile(path, b, 0o600)
 }

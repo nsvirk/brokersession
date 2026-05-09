@@ -42,7 +42,7 @@ const loginTimeFormat = "2006-01-02 15:04:05"
 //  4. GET /connect/login → 302; parse sess_id from Location
 //  5. GET /connect/finish?sess_id=… → 302; parse request_token from Location
 //  6. POST /session/token (SHA256 checksum) → access_token, refresh_token
-func (c *Client) GenerateSession(ctx context.Context, creds Credentials) (*brokersession.Session, error) {
+func (c *Client) GenerateSession(ctx context.Context, creds Credentials) (*Session, error) {
 	if err := creds.Validate(); err != nil {
 		return nil, err
 	}
@@ -51,7 +51,7 @@ func (c *Client) GenerateSession(ctx context.Context, creds Credentials) (*broke
 	headers := c.defaultHeaders()
 
 	// --- OMS leg ---
-	loginResp, loginCookies, err := c.doLogin(ctx, httpClient, headers, creds)
+	loginResp, _, err := c.doLogin(ctx, httpClient, headers, creds)
 	if err != nil {
 		return nil, err
 	}
@@ -68,7 +68,6 @@ func (c *Client) GenerateSession(ctx context.Context, creds Credentials) (*broke
 		}
 	}
 	publicToken := cookieValue(twofaCookies, "public_token")
-	kfSession := cookieValue(loginCookies, "kf_session")
 
 	profile, err := c.doProfile(ctx, httpClient, headers, enctoken)
 	if err != nil {
@@ -77,40 +76,26 @@ func (c *Client) GenerateSession(ctx context.Context, creds Credentials) (*broke
 
 	loginTime := time.Now().In(internal.IST)
 
-	session := &brokersession.Session{
-		Broker:     brokersession.BrokerZerodha,
-		UserID:     creds.UserID,
-		UserName:   profile.Data.UserName,
-		UserType:   profile.Data.UserType,
-		Email:      profile.Data.Email,
-		Enctoken:   enctoken,
-		Exchanges:  profile.Data.Exchanges,
-		Products:   profile.Data.Products,
-		OrderTypes: profile.Data.OrderTypes,
-		IssuedAt:   &loginTime,
+	session := &Session{
+		Broker:        brokersession.BrokerZerodha,
+		UserID:        creds.UserID,
+		UserName:      profile.Data.UserName,
+		UserShortname: profile.Data.UserShortname,
+		UserType:      profile.Data.UserType,
+		Email:         profile.Data.Email,
+		AvatarURL:     profile.Data.AvatarURL,
+		Enctoken:      enctoken,
+		PublicToken:   publicToken,
+		Exchanges:     profile.Data.Exchanges,
+		Products:      profile.Data.Products,
+		OrderTypes:    profile.Data.OrderTypes,
+		LoginTime:     loginTime.Format(loginTimeFormat),
+		IssuedAt:      &loginTime,
 	}
 
 	if creds.APIKey == "" {
-		// OMS-only flow: no token-exchange call to source Raw from. Synthesize
-		// a Kite-shaped {"status":"success","data":{...}} envelope using the
-		// data we have (profile + cookies + login time).
-		session.Raw = map[string]any{
-			"status": "success",
-			"data": map[string]any{
-				"user_id":      creds.UserID,
-				"user_name":    profile.Data.UserName,
-				"user_type":    profile.Data.UserType,
-				"email":        profile.Data.Email,
-				"broker":       profile.Data.Broker,
-				"exchanges":    profile.Data.Exchanges,
-				"products":     profile.Data.Products,
-				"order_types":  profile.Data.OrderTypes,
-				"enctoken":     enctoken,
-				"public_token": publicToken,
-				"kf_session":   kfSession,
-				"login_time":   loginTime.Format(loginTimeFormat),
-			},
-		}
+		// OMS-only flow: no token-exchange call. The session is fully
+		// populated from profile + cookies + login time.
 		return session, nil
 	}
 
@@ -123,7 +108,7 @@ func (c *Client) GenerateSession(ctx context.Context, creds Credentials) (*broke
 	if err != nil {
 		return nil, err
 	}
-	tokenResp, raw, err := c.doSessionToken(ctx, httpClient, headers, creds, requestToken)
+	tokenResp, err := c.doSessionToken(ctx, httpClient, headers, creds, requestToken)
 	if err != nil {
 		return nil, err
 	}
@@ -133,17 +118,29 @@ func (c *Client) GenerateSession(ctx context.Context, creds Credentials) (*broke
 	// but the cookie value is canonical).
 	session.AccessToken = tokenResp.Data.AccessToken
 	session.APIKey = creds.APIKey
+	session.RefreshToken = tokenResp.Data.RefreshToken
+	session.Silo = tokenResp.Data.Silo
+	session.Meta = Meta{DematConsent: tokenResp.Data.Meta.DematConsent}
+	if tokenResp.Data.LoginTime != "" {
+		session.LoginTime = tokenResp.Data.LoginTime
+	}
 	if t, err := time.ParseInLocation(loginTimeFormat, tokenResp.Data.LoginTime, internal.IST); err == nil {
 		session.IssuedAt = &t
 	}
 	if tokenResp.Data.UserName != "" {
 		session.UserName = tokenResp.Data.UserName
 	}
+	if tokenResp.Data.UserShortname != "" {
+		session.UserShortname = tokenResp.Data.UserShortname
+	}
 	if tokenResp.Data.UserType != "" {
 		session.UserType = tokenResp.Data.UserType
 	}
 	if tokenResp.Data.Email != "" {
 		session.Email = tokenResp.Data.Email
+	}
+	if tokenResp.Data.AvatarURL != "" {
+		session.AvatarURL = tokenResp.Data.AvatarURL
 	}
 	if len(tokenResp.Data.Exchanges) > 0 {
 		session.Exchanges = tokenResp.Data.Exchanges
@@ -154,7 +151,6 @@ func (c *Client) GenerateSession(ctx context.Context, creds Credentials) (*broke
 	if len(tokenResp.Data.OrderTypes) > 0 {
 		session.OrderTypes = tokenResp.Data.OrderTypes
 	}
-	session.Raw = raw
 	return session, nil
 }
 
@@ -238,14 +234,16 @@ func (c *Client) doTwoFA(ctx context.Context, hc *http.Client, headers http.Head
 type profileResponse struct {
 	Status string `json:"status"`
 	Data   struct {
-		UserID     string   `json:"user_id"`
-		UserName   string   `json:"user_name"`
-		UserType   string   `json:"user_type"`
-		Email      string   `json:"email"`
-		Broker     string   `json:"broker"`
-		Exchanges  []string `json:"exchanges"`
-		Products   []string `json:"products"`
-		OrderTypes []string `json:"order_types"`
+		UserID        string   `json:"user_id"`
+		UserName      string   `json:"user_name"`
+		UserShortname string   `json:"user_shortname"`
+		UserType      string   `json:"user_type"`
+		Email         string   `json:"email"`
+		AvatarURL     string   `json:"avatar_url"`
+		Broker        string   `json:"broker"`
+		Exchanges     []string `json:"exchanges"`
+		Products      []string `json:"products"`
+		OrderTypes    []string `json:"order_types"`
 	} `json:"data"`
 }
 
@@ -355,25 +353,30 @@ func (c *Client) doGetRequestToken(ctx context.Context, hc *http.Client, headers
 type sessionTokenResponse struct {
 	Status string `json:"status"`
 	Data   struct {
-		UserID       string   `json:"user_id"`
-		UserName     string   `json:"user_name"`
-		UserType     string   `json:"user_type"`
-		Email        string   `json:"email"`
-		Broker       string   `json:"broker"`
-		Exchanges    []string `json:"exchanges"`
-		Products     []string `json:"products"`
-		OrderTypes   []string `json:"order_types"`
-		APIKey       string   `json:"api_key"`
-		AccessToken  string   `json:"access_token"`
-		RefreshToken string   `json:"refresh_token"`
-		Enctoken     string   `json:"enctoken"`
-		LoginTime    string   `json:"login_time"`
+		UserID        string   `json:"user_id"`
+		UserName      string   `json:"user_name"`
+		UserShortname string   `json:"user_shortname"`
+		UserType      string   `json:"user_type"`
+		Email         string   `json:"email"`
+		AvatarURL     string   `json:"avatar_url"`
+		Broker        string   `json:"broker"`
+		Exchanges     []string `json:"exchanges"`
+		Products      []string `json:"products"`
+		OrderTypes    []string `json:"order_types"`
+		APIKey        string   `json:"api_key"`
+		AccessToken   string   `json:"access_token"`
+		PublicToken   string   `json:"public_token"`
+		RefreshToken  string   `json:"refresh_token"`
+		Enctoken      string   `json:"enctoken"`
+		Silo          string   `json:"silo"`
+		LoginTime     string   `json:"login_time"`
+		Meta          struct {
+			DematConsent string `json:"demat_consent"`
+		} `json:"meta"`
 	} `json:"data"`
 }
 
-// doSessionToken returns the typed response and the raw JSON-decoded body
-// so the caller can store the verbatim broker response in Session.Raw.
-func (c *Client) doSessionToken(ctx context.Context, hc *http.Client, headers http.Header, creds Credentials, requestToken string) (*sessionTokenResponse, map[string]any, error) {
+func (c *Client) doSessionToken(ctx context.Context, hc *http.Client, headers http.Header, creds Credentials, requestToken string) (*sessionTokenResponse, error) {
 	checksum := sha256Hex(creds.APIKey + requestToken + creds.APISecret)
 
 	form := url.Values{}
@@ -387,25 +390,17 @@ func (c *Client) doSessionToken(ctx context.Context, hc *http.Client, headers ht
 
 	body, err := doAndBody(ctx, hc, req, StepSessionToken)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	var out sessionTokenResponse
 	if err := json.Unmarshal(body, &out); err != nil {
-		return nil, nil, &brokersession.Error{
+		return nil, &brokersession.Error{
 			Broker:  brokersession.BrokerZerodha,
 			Step:    StepSessionToken,
 			Message: "decode response: " + err.Error(),
 		}
 	}
-	var raw map[string]any
-	if err := json.Unmarshal(body, &raw); err != nil {
-		return nil, nil, &brokersession.Error{
-			Broker:  brokersession.BrokerZerodha,
-			Step:    StepSessionToken,
-			Message: "decode raw response: " + err.Error(),
-		}
-	}
-	return &out, raw, nil
+	return &out, nil
 }
 
 // --- helpers ---

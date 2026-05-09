@@ -33,7 +33,7 @@ func deleteServer(t *testing.T, status int, body string, gotAuth *string) {
 func TestDeleteSession_HappyPath(t *testing.T) {
 	var gotAuth string
 	deleteServer(t, http.StatusOK, `{}`, &gotAuth)
-	if err := New().DeleteSession(context.Background(), &brokersession.Session{AccessToken: "tok"}); err != nil {
+	if err := New().DeleteSession(context.Background(), &Session{AccessToken: "tok"}); err != nil {
 		t.Fatalf("DeleteSession error: %v", err)
 	}
 	if gotAuth != "Bearer tok" {
@@ -43,21 +43,21 @@ func TestDeleteSession_HappyPath(t *testing.T) {
 
 func TestDeleteSession_401_Idempotent(t *testing.T) {
 	deleteServer(t, http.StatusUnauthorized, `{"errors":[{"message":"already gone"}]}`, nil)
-	if err := New().DeleteSession(context.Background(), &brokersession.Session{AccessToken: "tok"}); err != nil {
+	if err := New().DeleteSession(context.Background(), &Session{AccessToken: "tok"}); err != nil {
 		t.Errorf("DeleteSession returned %v on 401, want nil (idempotent)", err)
 	}
 }
 
 func TestDeleteSession_404_Idempotent(t *testing.T) {
 	deleteServer(t, http.StatusNotFound, ``, nil)
-	if err := New().DeleteSession(context.Background(), &brokersession.Session{AccessToken: "tok"}); err != nil {
+	if err := New().DeleteSession(context.Background(), &Session{AccessToken: "tok"}); err != nil {
 		t.Errorf("DeleteSession returned %v on 404, want nil (idempotent)", err)
 	}
 }
 
 func TestDeleteSession_500(t *testing.T) {
 	deleteServer(t, http.StatusInternalServerError, `{"errors":[{"message":"oops"}]}`, nil)
-	err := New().DeleteSession(context.Background(), &brokersession.Session{AccessToken: "tok"})
+	err := New().DeleteSession(context.Background(), &Session{AccessToken: "tok"})
 	assertBSError(t, err, brokersession.BrokerUpstox, brokersession.StepDelete, http.StatusInternalServerError, "oops")
 }
 

@@ -24,7 +24,7 @@ import (
 // Calling DeleteSession with a nil session returns a *brokersession.Error
 // with Step = StepValidate and Message = "session: required" without
 // making any HTTP call.
-func (c *Client) DeleteSession(ctx context.Context, session *brokersession.Session) error {
+func (c *Client) DeleteSession(ctx context.Context, session *Session) error {
 	if session == nil {
 		return &brokersession.Error{
 			Broker:  brokersession.BrokerZerodha,

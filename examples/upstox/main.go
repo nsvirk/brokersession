@@ -1,10 +1,24 @@
-// Example program: generate an Upstox session from credentials supplied
-// via env vars, print the result, and (optionally) delete it.
+// Example program: generate an Upstox session from a credentials file,
+// write the session JSON to a sibling sessions/ directory, and verify.
 //
-// Required env: UPSTOX_API_KEY, UPSTOX_API_SECRET, UPSTOX_MOBILE,
-// UPSTOX_PIN, UPSTOX_TOTP_SECRET, UPSTOX_REDIRECT_URL. The TOTP secret
-// is fed through brokersession.GenerateTOTPValue and the resulting
-// 6-digit code is passed as Credentials.TOTPValue.
+// Behavior:
+//
+//  1. If a cached session file already exists, the program verifies it
+//     against the broker first. If the broker accepts it, the program
+//     prints `cache_session_valid: true` and exits without regenerating.
+//  2. Otherwise it prints `cache_session_valid: false`, runs the full
+//     headless flow, writes the new session, verifies it, and prints
+//     `generated_session_valid: <true|false>`.
+//
+// Usage:
+//
+//	go run ./examples/upstox <user>
+//
+// <user> is the bare user name (no `.json` suffix). File layout, rooted
+// at $BROKERSESSION_PATH (default ~/.brokersession):
+//
+//	<root>/upstox/users/<user>.json     // input credentials (snake_case)
+//	<root>/upstox/sessions/<user>.json  // output session (created if missing)
 package main
 
 import (
@@ -14,36 +28,52 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/nsvirk/brokersession"
 	"github.com/nsvirk/brokersession/upstox"
 )
 
-func main() {
-	// Derive the 6-digit code from the stored TOTP secret using the public
-	// helper. Using TOTPValue (instead of TOTPSecret) is the right path when
-	// the seed lives in a hardware token, password manager, or external
-	// secrets service that produces codes but won't release the seed. Here
-	// we read the secret from env purely to keep the example self-contained.
-	totpValue, err := brokersession.GenerateTOTPValue(os.Getenv("UPSTOX_TOTP_SECRET"), time.Now())
-	if err != nil {
-		log.Fatalf("generate totp value failed: %v", err)
-	}
+const broker = "upstox"
 
-	creds := upstox.Credentials{
-		APIKey:      os.Getenv("UPSTOX_API_KEY"),
-		APISecret:   os.Getenv("UPSTOX_API_SECRET"),
-		Mobile:      os.Getenv("UPSTOX_MOBILE"),
-		PIN:         os.Getenv("UPSTOX_PIN"),
-		TOTPValue:   totpValue,
-		RedirectURL: os.Getenv("UPSTOX_REDIRECT_URL"),
+func main() {
+	args := os.Args[1:]
+	if len(args) < 1 {
+		log.Fatalf("usage: go run ./examples/upstox <user>")
 	}
+	user := args[0]
+
+	root := brokersessionPath()
+	credsPath := filepath.Join(root, broker, "users", user+".json")
+	sessionPath := filepath.Join(root, broker, "sessions", user+".json")
+
+	printSeparator()
+	defer printSeparator()
+	printRow("broker", broker)
+	printRow("user", user)
+	printRow("session_file", sessionPath)
 
 	client := upstox.New()
-
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
+
+	// 1. Try the cached session first.
+	if cached, ok := tryLoadSession(sessionPath); ok {
+		valid, _ := client.VerifySession(ctx, cached)
+		printRow("cache_session_valid", valid)
+		if valid {
+			return
+		}
+	} else {
+		printRow("cache_session_valid", false)
+	}
+
+	// 2. Cache miss / invalid: regenerate.
+	var creds upstox.Credentials
+	if err := readJSON(credsPath, &creds); err != nil {
+		log.Fatalf("read creds %s: %v", credsPath, err)
+	}
 
 	session, err := client.GenerateSession(ctx, creds)
 	if err != nil {
@@ -55,13 +85,13 @@ func main() {
 		log.Fatalf("generate session failed: %v", err)
 	}
 
-	printJSON("session", session)
+	if err := writeJSON(sessionPath, session); err != nil {
+		log.Fatalf("write session %s: %v", sessionPath, err)
+	}
 
-	// Verify the session by hitting the broker's profile endpoint.
-	// GET https://api.upstox.com/v2/user/profile with
-	//   `Authorization: Bearer <access_token>`.
-	// 200 ⇒ true, any other status ⇒ false.
-	ok, err := client.VerifySession(ctx, session)
+	// Verify the freshly-generated session via GET /v2/user/profile with
+	// `Authorization: Bearer <access_token>`. 200 ⇒ true, anything else ⇒ false.
+	valid, err := client.VerifySession(ctx, session)
 	if err != nil {
 		var bsErr *brokersession.Error
 		if errors.As(err, &bsErr) {
@@ -70,22 +100,65 @@ func main() {
 		}
 		log.Fatalf("verify session failed: %v", err)
 	}
-	fmt.Printf("session_valid: %v\n", ok)
-
-	// Delete the session when done.
-	// Calls DELETE https://api.upstox.com/v2/logout. Idempotent.
-	//
-	// if err := client.DeleteSession(ctx, session); err != nil {
-	// 	log.Fatalf("delete session failed: %v", err)
-	// }
-	// fmt.Println("session deleted")
+	printRow("generated_session_valid", valid)
 }
 
-// printJSON marshals v as indented JSON and writes it to stdout.
-func printJSON(label string, v any) {
+// printRow prints a label/value pair with the value left-aligned in a
+// fixed column so successive rows line up. Width is sized for the
+// longest label this program emits ("generated_session_valid:").
+func printRow(label string, value any) {
+	fmt.Printf("%-25s%v\n", label+":", value)
+}
+
+// printSeparator prints a 50-dash horizontal rule used to bracket the
+// program's output.
+func printSeparator() {
+	fmt.Println("--------------------------------------------------")
+}
+
+// tryLoadSession returns the cached session and true if path exists and
+// decodes as an *upstox.Session. Missing or unparseable files return
+// (nil, false) — the caller treats that as a cache miss.
+func tryLoadSession(path string) (*upstox.Session, bool) {
+	var s upstox.Session
+	if err := readJSON(path, &s); err != nil {
+		return nil, false
+	}
+	return &s, true
+}
+
+// brokersessionPath returns $BROKERSESSION_PATH if set, else ~/.brokersession.
+func brokersessionPath() string {
+	if v := os.Getenv("BROKERSESSION_PATH"); v != "" {
+		return v
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		log.Fatalf("resolve home dir: %v", err)
+	}
+	return filepath.Join(home, ".brokersession")
+}
+
+// readJSON loads a JSON file into v. Unknown keys are ignored (default
+// encoding/json behavior); missing required fields surface later via
+// Credentials.Validate inside GenerateSession.
+func readJSON(path string, v any) error {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(b, v)
+}
+
+// writeJSON marshals v as indented JSON and writes it to path with 0600
+// permissions, creating parent directories as needed.
+func writeJSON(path string, v any) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
 	b, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
-		log.Fatalf("marshal %s: %v", label, err)
+		return err
 	}
-	fmt.Printf("%s:\n%s\n", label, b)
+	return os.WriteFile(path, b, 0o600)
 }

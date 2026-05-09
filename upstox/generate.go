@@ -54,8 +54,8 @@ type flowState struct {
 }
 
 // GenerateSession runs the six-step headless OAuth flow and returns a
-// populated *brokersession.Session.
-func (c *Client) GenerateSession(ctx context.Context, creds Credentials) (*brokersession.Session, error) {
+// populated *Session.
+func (c *Client) GenerateSession(ctx context.Context, creds Credentials) (*Session, error) {
 	if err := creds.Validate(); err != nil {
 		return nil, err
 	}
@@ -297,7 +297,7 @@ func (c *Client) doOAuthApprove(ctx context.Context, s *flowState) error {
 
 // --- Step 6: Token Exchange ---
 
-func (c *Client) doTokenExchange(ctx context.Context, s *flowState) (*brokersession.Session, error) {
+func (c *Client) doTokenExchange(ctx context.Context, s *flowState) (*Session, error) {
 	form := url.Values{
 		"code":          {s.authCode},
 		"client_id":     {s.creds.APIKey},
@@ -335,6 +335,8 @@ func (c *Client) doTokenExchange(ctx context.Context, s *flowState) (*brokersess
 		Exchanges     []string `json:"exchanges"`
 		Products      []string `json:"products"`
 		OrderTypes    []string `json:"order_types"`
+		POA           bool     `json:"poa"`
+		IsActive      bool     `json:"is_active"`
 	}
 	if err := json.Unmarshal(body, &tok); err != nil {
 		return nil, &brokersession.Error{
@@ -363,33 +365,24 @@ func (c *Client) doTokenExchange(ctx context.Context, s *flowState) (*brokersess
 		}
 	}
 
-	var raw map[string]any
-	if err := json.Unmarshal(body, &raw); err != nil {
-		return nil, &brokersession.Error{
-			Broker:     brokersession.BrokerUpstox,
-			Step:       StepTokenExchange,
-			StatusCode: resp.StatusCode,
-			Message:    "decode raw token response: " + err.Error(),
-		}
-	}
-
 	issuedAt := time.Unix(jwt.Iat, 0).In(internal.IST)
 	expiresAt := time.Unix(jwt.Exp, 0).In(internal.IST)
-	return &brokersession.Session{
+	return &Session{
 		Broker:        brokersession.BrokerUpstox,
 		UserID:        tok.UserID,
 		UserName:      tok.UserName,
 		UserType:      tok.UserType,
 		Email:         tok.Email,
-		APIKey:        s.creds.APIKey,
-		AccessToken:   tok.AccessToken,
-		ExtendedToken: tok.ExtendedToken,
 		Exchanges:     tok.Exchanges,
 		Products:      tok.Products,
 		OrderTypes:    tok.OrderTypes,
+		POA:           tok.POA,
+		IsActive:      tok.IsActive,
+		APIKey:        s.creds.APIKey,
+		AccessToken:   tok.AccessToken,
+		ExtendedToken: tok.ExtendedToken,
 		IssuedAt:      &issuedAt,
 		ExpiresAt:     &expiresAt,
-		Raw:           raw,
 	}, nil
 }
 

@@ -12,8 +12,8 @@ import (
 )
 
 // TestGenerateSession_FullFlow drives all six steps end-to-end against an
-// httptest.Server. Asserts the final *brokersession.Session is fully
-// populated and that broker/raw/issued_at/expires_at all wire up correctly.
+// httptest.Server. Asserts the final *Session is fully populated and that
+// broker / poa / is_active / issued_at / expires_at all wire up correctly.
 func TestGenerateSession_FullFlow(t *testing.T) {
 	creds := validCreds()
 	iat := time.Now().Unix()
@@ -40,7 +40,7 @@ func TestGenerateSession_FullFlow(t *testing.T) {
 		_, _ = w.Write([]byte(`{"success":true,"data":{"isApproved":true,"redirectUri":"https://example.com/cb?code=auth-code-987"}}`))
 	})
 	mux.HandleFunc("/token", func(w http.ResponseWriter, r *http.Request) {
-		_, _ = fmt.Fprintf(w, `{"access_token":"%s","extended_token":"ext","user_id":"AB1234","user_name":"User","user_type":"individual","email":"u@x.com","exchanges":["NSE"],"products":["I"],"order_types":["MARKET"]}`, jwt)
+		_, _ = fmt.Fprintf(w, `{"access_token":"%s","extended_token":"ext","user_id":"AB1234","user_name":"User","user_type":"individual","email":"u@x.com","exchanges":["NSE"],"products":["I"],"order_types":["MARKET"],"poa":true,"is_active":true}`, jwt)
 	})
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
@@ -71,8 +71,14 @@ func TestGenerateSession_FullFlow(t *testing.T) {
 	if len(sess.Exchanges) != 1 || sess.Exchanges[0] != "NSE" {
 		t.Errorf("Exchanges = %v", sess.Exchanges)
 	}
-	if sess.Raw["access_token"] != jwt {
-		t.Errorf("Raw.access_token mismatch")
+	if !sess.POA {
+		t.Errorf("POA = false, want true")
+	}
+	if !sess.IsActive {
+		t.Errorf("IsActive = false, want true")
+	}
+	if sess.ExtendedToken != "ext" {
+		t.Errorf("ExtendedToken = %q, want ext", sess.ExtendedToken)
 	}
 }
 

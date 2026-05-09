@@ -30,7 +30,7 @@ func deleteServer(t *testing.T, status int, body string, gotQuery *map[string][]
 func TestDeleteSession_API_HappyPath(t *testing.T) {
 	var gotQuery map[string][]string
 	deleteServer(t, http.StatusOK, `{"status":"success"}`, &gotQuery)
-	sess := &brokersession.Session{APIKey: "abc123", AccessToken: "acc-tok"}
+	sess := &Session{APIKey: "abc123", AccessToken: "acc-tok"}
 	if err := New().DeleteSession(context.Background(), sess); err != nil {
 		t.Fatalf("DeleteSession error: %v", err)
 	}
@@ -44,7 +44,7 @@ func TestDeleteSession_API_HappyPath(t *testing.T) {
 
 func TestDeleteSession_API_401_Idempotent(t *testing.T) {
 	deleteServer(t, http.StatusUnauthorized, `{"status":"error"}`, nil)
-	sess := &brokersession.Session{APIKey: "abc", AccessToken: "tok"}
+	sess := &Session{APIKey: "abc", AccessToken: "tok"}
 	if err := New().DeleteSession(context.Background(), sess); err != nil {
 		t.Errorf("DeleteSession returned %v on 401, want nil (idempotent)", err)
 	}
@@ -52,7 +52,7 @@ func TestDeleteSession_API_401_Idempotent(t *testing.T) {
 
 func TestDeleteSession_API_404_Idempotent(t *testing.T) {
 	deleteServer(t, http.StatusNotFound, ``, nil)
-	sess := &brokersession.Session{APIKey: "abc", AccessToken: "tok"}
+	sess := &Session{APIKey: "abc", AccessToken: "tok"}
 	if err := New().DeleteSession(context.Background(), sess); err != nil {
 		t.Errorf("DeleteSession returned %v on 404, want nil (idempotent)", err)
 	}
@@ -61,7 +61,7 @@ func TestDeleteSession_API_404_Idempotent(t *testing.T) {
 func TestDeleteSession_API_500(t *testing.T) {
 	deleteServer(t, http.StatusInternalServerError,
 		`{"status":"error","message":"oops","error_type":"GeneralException"}`, nil)
-	sess := &brokersession.Session{APIKey: "abc", AccessToken: "tok"}
+	sess := &Session{APIKey: "abc", AccessToken: "tok"}
 	err := New().DeleteSession(context.Background(), sess)
 	assertBSError(t, err, brokersession.BrokerZerodha, brokersession.StepDelete, http.StatusInternalServerError, "oops")
 }
@@ -73,7 +73,7 @@ func TestDeleteSession_OMSOnly_NoOp(t *testing.T) {
 	t.Cleanup(srv.Close)
 	withEndpoints(t, map[*string]string{&urlSessionToken: srv.URL + "/session/token"})
 
-	sess := &brokersession.Session{Enctoken: "enc-tok"} // APIKey empty → OMS-only
+	sess := &Session{Enctoken: "enc-tok"} // APIKey empty → OMS-only
 	if err := New().DeleteSession(context.Background(), sess); err != nil {
 		t.Errorf("OMS-only DeleteSession returned %v, want nil (no-op)", err)
 	}

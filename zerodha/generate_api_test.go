@@ -123,14 +123,17 @@ func TestDoSessionToken_HappyPath_ChecksumCorrect(t *testing.T) {
 		raw, _ := io.ReadAll(r.Body)
 		gotForm, _ = url.ParseQuery(string(raw))
 		_, _ = w.Write([]byte(`{"status":"success","data":{
-			"user_id":"AB1234","user_name":"User","user_type":"individual","email":"u@x.com",
+			"user_id":"AB1234","user_name":"User","user_shortname":"U","user_type":"individual",
+			"email":"u@x.com","avatar_url":"https://example.com/a.png",
 			"broker":"ZERODHA","exchanges":["NSE","BSE"],"products":["CNC","MIS"],
 			"order_types":["MARKET","LIMIT"],"api_key":"abc123","access_token":"acc-tok",
-			"refresh_token":"ref-tok","enctoken":"enc-from-api","login_time":"2026-05-03 09:30:00"
+			"public_token":"pub-tok","refresh_token":"ref-tok","enctoken":"enc-from-api",
+			"silo":"silo-1","login_time":"2026-05-03 09:30:00",
+			"meta":{"demat_consent":"physical"}
 		}}`))
 	})
 	c := New()
-	tokResp, raw, err := c.doSessionToken(context.Background(), defaultTestClient(), c.defaultHeaders(), creds, "REQTOK-xyz")
+	tokResp, err := c.doSessionToken(context.Background(), defaultTestClient(), c.defaultHeaders(), creds, "REQTOK-xyz")
 	if err != nil {
 		t.Fatalf("doSessionToken error: %v", err)
 	}
@@ -146,8 +149,14 @@ func TestDoSessionToken_HappyPath_ChecksumCorrect(t *testing.T) {
 	if tokResp.Data.AccessToken != "acc-tok" {
 		t.Errorf("AccessToken = %q, want acc-tok", tokResp.Data.AccessToken)
 	}
-	if data, ok := raw["data"].(map[string]any); !ok || data["access_token"] != "acc-tok" {
-		t.Errorf("Raw.data.access_token mismatch")
+	if tokResp.Data.RefreshToken != "ref-tok" {
+		t.Errorf("RefreshToken = %q, want ref-tok", tokResp.Data.RefreshToken)
+	}
+	if tokResp.Data.Silo != "silo-1" {
+		t.Errorf("Silo = %q, want silo-1", tokResp.Data.Silo)
+	}
+	if tokResp.Data.Meta.DematConsent != "physical" {
+		t.Errorf("Meta.DematConsent = %q, want physical", tokResp.Data.Meta.DematConsent)
 	}
 }
 
@@ -157,7 +166,7 @@ func TestDoSessionToken_KiteErrorEnvelope(t *testing.T) {
 		_, _ = w.Write([]byte(`{"status":"error","message":"Token is invalid","error_type":"TokenException"}`))
 	})
 	c := New()
-	_, _, err := c.doSessionToken(context.Background(), defaultTestClient(), c.defaultHeaders(), apiCreds(), "x")
+	_, err := c.doSessionToken(context.Background(), defaultTestClient(), c.defaultHeaders(), apiCreds(), "x")
 	assertBSError(t, err, brokersession.BrokerZerodha, StepSessionToken, http.StatusUnauthorized, "Token is invalid")
 }
 

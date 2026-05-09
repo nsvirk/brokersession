@@ -15,13 +15,13 @@ import (
 // a pre-computed code (useful when the 2FA seed is held by a hardware
 // token or a separate secrets service that won't release the seed).
 type Credentials struct {
-	APIKey      string // UUID issued by account.upstox.com/developer/apps
-	APISecret   string // OAuth client secret
-	Mobile      string // 10 digits, no country code
-	PIN         string // 6 digits
-	TOTPSecret  string // base32, from Authenticator-app 2FA setup; alternative to TOTPValue
-	TOTPValue   string // 6-digit code; alternative to TOTPSecret
-	RedirectURL string // absolute URL registered with the developer-portal app
+	APIKey      string `json:"api_key"`               // UUID issued by account.upstox.com/developer/apps
+	APISecret   string `json:"api_secret"`            // OAuth client secret
+	Mobile      string `json:"mobile"`                // 10 digits, no country code
+	PIN         string `json:"pin"`                   // 6 digits
+	TOTPSecret  string `json:"totp_secret,omitempty"` // base32; alternative to TOTPValue
+	TOTPValue   string `json:"totp_value,omitempty"`  // 6-digit code; alternative to TOTPSecret
+	RedirectURL string `json:"redirect_url"`          // absolute URL registered with the developer-portal app
 }
 
 var (
