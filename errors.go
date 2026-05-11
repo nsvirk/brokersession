@@ -9,6 +9,7 @@ type BrokerName string
 const (
 	BrokerZerodha BrokerName = "zerodha"
 	BrokerUpstox  BrokerName = "upstox"
+	BrokerDhan    BrokerName = "dhan"
 )
 
 // Step identifies a stage of the GenerateSession / DeleteSession flow.
