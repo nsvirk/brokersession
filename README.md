@@ -14,6 +14,7 @@ etc.).
 | ------- | ----------------------------------------- | ------------------------- |
 | Zerodha | `github.com/nsvirk/brokersession/zerodha` | OMS-only, OMS + API       |
 | Upstox  | `github.com/nsvirk/brokersession/upstox`  | Six-step OAuth (headless) |
+| Dhan    | `github.com/nsvirk/brokersession/dhan`    | TOTP + PIN (single POST)  |
 
 ## ✨ Features
 
@@ -84,6 +85,17 @@ broker. Unknown keys are ignored by the standard `encoding/json` decoder.
 }
 ```
 
+**Dhan** (all fields required, plus exactly one TOTP field):
+
+```jsonc
+{
+  "client_id":   "1000000001",                      // numeric Dhan client ID
+  "pin":         "123456",                          // 6 digits
+  "totp_secret": "JBSWY3DPEHPK3PXP",                // base32; alternative to totp_value
+  "totp_value":  ""                                 // 6-digit code; alternative to totp_secret
+}
+```
+
 ### 📤 Session shape
 
 The result of `GenerateSession` is a per-broker `*Session` whose fields
@@ -140,6 +152,22 @@ populates the full shape.
   "extended_token": "...",
   "issued_at":      "2026-05-03T09:30:00+05:30",                   // decoded from JWT iat
   "expires_at":     "2026-05-04T06:00:00+05:30"                    // decoded from JWT exp
+}
+```
+
+**Dhan** (`*dhan.Session`):
+
+```jsonc
+{
+  "broker":                  "dhan",
+  "client_id":               "1000000001",
+  "client_name":             "JOHN DOE",
+  "client_ucc":              "ABCD12345E",
+  "given_power_of_attorney": false,
+  "access_token":            "eyJhbGciOi...",
+  "expiry_time":             "2026-05-12 21:46:16",                 // normalized from API "2026-05-12T21:46:16.999"
+  "issued_at":               "2026-05-11T19:51:00+05:30",           // time.Now() in IST (Dhan API does not return one)
+  "expires_at":              "2026-05-12T21:46:16+05:30"            // expiry_time parsed in IST
 }
 ```
 
@@ -322,6 +350,75 @@ writes the resulting session to
 
 ```sh
 go run ./examples/upstox alice
+```
+
+### 💼 Dhan
+
+```go
+package main
+
+import (
+    "context"
+    "encoding/json"
+    "errors"
+    "fmt"
+    "log"
+    "os"
+    "time"
+
+    "github.com/nsvirk/brokersession"
+    "github.com/nsvirk/brokersession/dhan"
+)
+
+func main() {
+    // Derive the 6-digit code from the stored TOTP secret using the
+    // public helper, then feed it as TOTPValue.
+    totpValue, err := brokersession.GenerateTOTPValue(os.Getenv("DHAN_TOTP_SECRET"), time.Now())
+    if err != nil {
+        log.Fatalf("generate totp value failed: %v", err)
+    }
+
+    creds := dhan.Credentials{
+        ClientID:  os.Getenv("DHAN_CLIENT_ID"),
+        PIN:       os.Getenv("DHAN_PIN"),
+        TOTPValue: totpValue,
+    }
+
+    client := dhan.New()
+    ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+    defer cancel()
+
+    session, err := client.GenerateSession(ctx, creds)
+    if err != nil {
+        var bsErr *brokersession.Error
+        if errors.As(err, &bsErr) {
+            log.Fatalf("generate failed: broker=%s step=%s status=%d msg=%s",
+                bsErr.Broker, bsErr.Step, bsErr.StatusCode, bsErr.Message)
+        }
+        log.Fatalf("generate failed: %v", err)
+    }
+
+    b, _ := json.MarshalIndent(session, "", "  ")
+    fmt.Printf("session:\n%s\n", b)
+
+    ok, err := client.VerifySession(ctx, session)
+    if err != nil {
+        log.Fatalf("verify failed: %v", err)
+    }
+    fmt.Printf("session_valid: %v\n", ok)
+
+    // DeleteSession is a no-op for Dhan (no logout endpoint).
+}
+```
+
+A runnable, file-driven version lives at
+[examples/dhan/main.go](./examples/dhan/main.go). It reads credentials
+from `$BROKERSESSION_PATH/dhan/users/<user>.json` and writes the
+resulting session to `$BROKERSESSION_PATH/dhan/sessions/<user>.json`
+(`$BROKERSESSION_PATH` defaults to `~/.brokersession`):
+
+```sh
+go run ./examples/dhan alice
 ```
 
 ## 🧪 Tests
