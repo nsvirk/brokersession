@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v1.2.0] - 2026-05-11
+
+### Added
+
+- `dhan` subpackage: single-step headless session flow using Dhan's
+  `POST /app/generateAccessToken` (TOTP + PIN). Includes `Credentials`,
+  `Session`, `GenerateSession`, `VerifySession`, and a no-op
+  `DeleteSession` (Dhan exposes no logout endpoint).
+- Top-level `BrokerDhan` broker-name constant.
+- File-driven `examples/dhan` program matching the existing
+  `examples/zerodha` and `examples/upstox` shape.
+
 ## [v1.1.0] - 2026-05-10
 
 Breaking change: `Session` is now per-broker, mirroring how `Credentials`
