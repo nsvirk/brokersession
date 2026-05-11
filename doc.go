@@ -19,4 +19,5 @@
 //
 //	github.com/nsvirk/brokersession/zerodha
 //	github.com/nsvirk/brokersession/upstox
+//	github.com/nsvirk/brokersession/dhan
 package brokersession
