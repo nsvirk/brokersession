@@ -35,3 +35,6 @@ CLAUDE.md
 PLAN_*.md
 scripts/
 docs/
+
+# CLI / Lambda apps — local-only, never committed
+cmd/
